@@ -94,7 +94,7 @@ if "usuario_activo" not in st.session_state:
 with st.sidebar:
     st.subheader("🔐 Acceso de Equipo")
     if st.session_state.usuario_activo is None:
-        user_sel = st.selectbox("Tu nombre", [""] + [d["nombre"] for d in directorio if d["nivel_acceso"] in ["Admin", "Editor"]])
+        user_sel = st.selectbox("Tu nombre", [""] + [d["nombre"] for d in directorio])
         pin_in = st.text_input("PIN de acceso", type="password", placeholder="Ej: 1234")
         if st.button("Desbloquear Edición", use_container_width=True):
             u_match = next((d for d in directorio if d["nombre"] == user_sel and str(d.get("pin_acceso")) == pin_in), None)
