@@ -111,19 +111,48 @@ def cargar_datos():
         descendente=False
     )
 
-    servicios.sort(key=lambda s: (s["fecha"], s["id"]))
+    servicios.sort(key=lambda s: (s["fecha"] or "9999-12-31", s["id"]))
 
     repertorio = leer(
         "repertorio" if autenticado else "repertorio_publico",
         "titulo"
     )
 
+    # El directorio público nunca incluye PIN ni identificadores de autenticación.
+    if admin:
+        directorio = leer(
+            "directorio_alabanza", "nombre", columnas=
+            "id,nombre,rol_principal,instrumento_secundario,banda_templo,nivel_acceso"
+        )
+    else:
+        directorio = leer("directorio_publico", "nombre")
+
     fundamentos = leer(
         "fundamentos" if autenticado else "fundamentos_publicos",
-        "id",
-        True
+        "id", descendente=False
     )
 
+    # Las fechas de Fundamentos están almacenadas como texto en español.
+    meses = {"enero": 1, "febrero": 2, "marzo": 3, "abril": 4,
+             "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
+             "septiembre": 9, "setiembre": 9, "octubre": 10,
+             "noviembre": 11, "diciembre": 12}
+
+    def fecha_fundamento(item):
+        fecha_texto = str(item.get("fecha") or "").strip().lower()
+        try:
+            return date.fromisoformat(fecha_texto)
+        except ValueError:
+            pass
+        encontrado = re.fullmatch(r"(\d{1,2}) de ([a-záéíóú]+) de (\d{4})", fecha_texto)
+        if encontrado and encontrado.group(2) in meses:
+            try:
+                return date(int(encontrado.group(3)), meses[encontrado.group(2)], int(encontrado.group(1)))
+            except ValueError:
+                pass
+        return date.max
+
+    fundamentos.sort(key=lambda item: (fecha_fundamento(item), item["id"]))
     return servicios, repertorio, directorio, fundamentos
 
 servicios, repertorio, directorio, fundamentos = cargar_datos()
@@ -255,21 +284,18 @@ with tabs[0]:
     * La paleta de colores siempre permitirá utilizar **colores neutros** (negro, blanco o gris) siempre considerándolos como no principales.
     """)
 
-    # Selección dinámica. Solo se muestra el próximo DOMINGO con publicación activada.
-    # Para visitantes, la vista servicios_publicos también filtra publicar = true.
+    # Seleccionar el próximo servicio publicado, sea domingo u otro día.
     hoy = datetime.now(ZoneInfo("America/Guatemala")).date()
-servicios_publicables = [
-    s for s in servicios
-    if s.get("publicar", False)
-    and s.get("fecha")
-    and date.fromisoformat(s["fecha"]) >= hoy
-    and date.fromisoformat(s["fecha"]).weekday() == 6
-]
-
-servicios_publicables.sort(key=lambda s: (s["fecha"], s["id"]))
+    servicios_publicables = [
+        servicio for servicio in servicios
+        if servicio.get("publicar") is True
+        and servicio.get("fecha")
+        and date.fromisoformat(servicio["fecha"]) >= hoy
+    ]
+    servicios_publicables.sort(key=lambda servicio: (servicio["fecha"], servicio["id"]))
     if servicios_publicables:
         srv_actual = servicios_publicables[0]
-        st.caption(f"Próximo servicio publicado: {srv_actual['fecha']} · Actualización automática al cambiar la fecha")
+        st.caption(f"Próximo servicio publicado: {srv_actual['fecha']} · Selección automática por fecha")
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("📍 Lugar / Banda", f"{srv_actual.get('lugar_servicio') or 'Jóvenes'}", srv_actual.get("banda_templo"))
@@ -325,7 +351,7 @@ servicios_publicables.sort(key=lambda s: (s["fecha"], s["id"]))
         else:
             st.caption("No se han seleccionado canciones para este domingo todavía.")
     else:
-        st.info("Aún no hay un servicio dominical futuro marcado como publicado. Un administrador puede activar la publicación desde Servicios.")
+        st.info("Aún no hay un próximo servicio publicado. Un administrador puede activarlo desde Servicios.")
 
     st.divider()
 
@@ -397,10 +423,8 @@ if autenticado:
                 f_publicar = st.checkbox(
                     "📢 Publicar este servicio en la página principal cuando corresponda su fecha",
                     value=bool(s_actual.get("publicar", False)),
-                    help="Solo los servicios de domingo con este indicador activado pueden aparecer en la portada."
+                    help="El próximo servicio publicado aparecerá en la portada al llegar su fecha, sin importar el día."
                 )
-                if f_publicar and f_fecha.weekday() != 6:
-                    st.warning("La portada automática está configurada para domingos. Esta fecha no es domingo.")
 
                 f_banda_asig = st.multiselect("🎸 Banda Asignada (Músicos y Voces)", dir_nombres, default=[m for m in (s_actual.get("banda_asignada") or []) if m in dir_nombres])
                 f_setlist = st.multiselect("🎵 Setlist del Domingo (En orden)", canciones_nombres, default=[c for c in (s_actual.get("setlist_canciones") or []) if c in canciones_nombres])
