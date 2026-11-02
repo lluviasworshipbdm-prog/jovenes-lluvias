@@ -106,18 +106,24 @@ def cargar_datos():
             return []
 
     servicios = leer(
-    "servicios_maestro" if autenticado else "servicios_publicos",
-    "fecha",
-    descendente=False
-)
-servicios.sort(key=lambda s: (s["fecha"], s["id"]))
-    repertorio = leer("repertorio" if autenticado else "repertorio_publico", "titulo")
-    fundamentos = leer("fundamentos" if autenticado else "fundamentos_publicos", "id", True)
-    if admin:
-        directorio = leer("directorio_alabanza", "nombre", columnas=
-                         "id,nombre,rol_principal,instrumento_secundario,banda_templo,nivel_acceso,auth_user_id")
-    else:
-        directorio = leer("directorio_publico", "nombre")
+        "servicios_maestro" if autenticado else "servicios_publicos",
+        "fecha",
+        descendente=False
+    )
+
+    servicios.sort(key=lambda s: (s["fecha"], s["id"]))
+
+    repertorio = leer(
+        "repertorio" if autenticado else "repertorio_publico",
+        "titulo"
+    )
+
+    fundamentos = leer(
+        "fundamentos" if autenticado else "fundamentos_publicos",
+        "id",
+        True
+    )
+
     return servicios, repertorio, directorio, fundamentos
 
 servicios, repertorio, directorio, fundamentos = cargar_datos()
