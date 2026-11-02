@@ -44,32 +44,73 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- CONEXIÓN A SUPABASE ---
-def init_db():
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
-    return create_client(url, key)
+# --- CONEXIÓN Y SESIONES SEGURAS ---
+import logging
+import html
 
-supabase = init_db()
+logger = logging.getLogger(__name__)
 
-# --- CARGA DE DATOS DIRECTA ---
+def nuevo_cliente():
+    # Usar solamente la clave publishable/anon, nunca service_role.
+    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+
+# Un cliente nuevo por ejecución/sesión; no compartir clientes autenticados con cache_resource.
+supabase = nuevo_cliente()
+
+if "access_token" not in st.session_state:
+    st.session_state.access_token = None
+if "refresh_token" not in st.session_state:
+    st.session_state.refresh_token = None
+
+st.session_state.usuario_activo = None
+st.session_state.nivel_acceso = "Lectura"
+
+if st.session_state.access_token and st.session_state.refresh_token:
+    try:
+        session_response = supabase.auth.set_session(
+            st.session_state.access_token,
+            st.session_state.refresh_token
+        )
+        if session_response.session:
+            st.session_state.access_token = session_response.session.access_token
+            st.session_state.refresh_token = session_response.session.refresh_token
+
+        usuario = supabase.auth.get_user().user
+        if usuario:
+            perfil = (supabase.table("directorio_alabanza")
+                      .select("nombre,nivel_acceso")
+                      .eq("auth_user_id", str(usuario.id))
+                      .limit(1).execute().data or [])
+            if perfil:
+                st.session_state.usuario_activo = perfil[0]["nombre"]
+                st.session_state.nivel_acceso = perfil[0].get("nivel_acceso") or "Lectura"
+    except Exception:
+        logger.exception("Error restaurando la sesión de Supabase Auth")
+        st.session_state.access_token = None
+        st.session_state.refresh_token = None
+
+# --- CONSULTAS, RESPETANDO RLS Y LAS VISTAS PUBLICAS ---
 def cargar_datos():
-    try:
-        servicios = supabase.table("servicios_maestro").select("*").order("fecha", desc=False).execute().data or []
-    except Exception:
-        servicios = []
-    try:
-        repertorio = supabase.table("repertorio").select("*").order("titulo").execute().data or []
-    except Exception:
-        repertorio = []
-    try:
-        directorio = supabase.table("directorio_alabanza").select("*").order("nombre").execute().data or []
-    except Exception:
-        directorio = []
-    try:
-        fundamentos = supabase.table("fundamentos").select("*").order("id", desc=True).execute().data or []
-    except Exception:
-        fundamentos = []
+    autenticado = st.session_state.usuario_activo is not None
+    admin = st.session_state.nivel_acceso == "Admin" and autenticado
+
+    def leer(tabla, orden, descendente=False, columnas="*"):
+        try:
+            return (supabase.table(tabla).select(columnas)
+                    .order(orden, desc=descendente).execute().data or [])
+        except Exception:
+            logger.exception("Error al leer %s", tabla)
+            st.error(f"No se pudo consultar {tabla}. Revisa las vistas y políticas RLS en Supabase.")
+            return []
+
+    servicios = leer("servicios_maestro" if autenticado else "servicios_publicos", "fecha")
+    repertorio = leer("repertorio" if autenticado else "repertorio_publico", "titulo")
+    fundamentos = leer("fundamentos" if autenticado else "fundamentos_publicos", "id", True)
+    if admin:
+        directorio = leer("directorio_alabanza", "nombre", columnas=
+                         "id,nombre,rol_principal,instrumento_secundario,banda_templo,nivel_acceso,auth_user_id")
+    else:
+        directorio = leer("directorio_publico", "nombre")
     return servicios, repertorio, directorio, fundamentos
 
 servicios, repertorio, directorio, fundamentos = cargar_datos()
@@ -96,31 +137,74 @@ def transponer_texto(texto, semitonos):
     patron = r'\b([A-G][b#]?)(m|maj7|m7|7|sus4|sus2|add9|dim|aug)?(?=\s|$|/|\n)'
     return re.sub(patron, reemplazar_acorde, texto)
 
-# --- SISTEMA DE LOGIN ---
-if "usuario_activo" not in st.session_state:
-    st.session_state.usuario_activo = None
-    st.session_state.nivel_acceso = "Lectura"
+# --- SISTEMA DE LOGIN CON SUPABASE AUTH ---
 
 with st.sidebar:
     st.subheader("🔐 Acceso de Equipo")
+
     if st.session_state.usuario_activo is None:
-        user_sel = st.selectbox("Tu nombre", [""] + dir_nombres)
-        pin_in = st.text_input("PIN de acceso", type="password", placeholder="Ej: 1234")
-        if st.button("Desbloquear Edición", use_container_width=True):
-            u_match = next((d for d in directorio if d["nombre"] == user_sel and str(d.get("pin_acceso")) == pin_in), None)
-            if u_match:
-                st.session_state.usuario_activo = u_match["nombre"]
-                st.session_state.nivel_acceso = u_match["nivel_acceso"]
-                st.rerun()
-            else:
-                st.error("PIN incorrecto")
+        if st.session_state.access_token:
+            st.warning("Cuenta autenticada, pero sin un perfil vinculado en el directorio. Contacta a un administrador.")
+
+        with st.form("form_login"):
+            correo = st.text_input("Correo electrónico")
+            password = st.text_input(
+                "Contraseña",
+                type="password"
+            )
+
+            ingresar = st.form_submit_button(
+                "Iniciar sesión",
+                use_container_width=True
+            )
+
+        if ingresar:
+            try:
+                respuesta = supabase.auth.sign_in_with_password({
+                    "email": correo.strip(),
+                    "password": password
+                })
+
+                if respuesta.session:
+                    st.session_state.access_token = (
+                        respuesta.session.access_token
+                    )
+                    st.session_state.refresh_token = (
+                        respuesta.session.refresh_token
+                    )
+                    st.rerun()
+                else:
+                    st.error("No se pudo iniciar sesión.")
+
+            except Exception:
+                logging.exception("Error de autenticación")
+                st.error(
+                    "No se pudo iniciar sesión. "
+                    "Verifica tu correo y contraseña."
+                )
+
     else:
-        st.success(f"Conectado: **{st.session_state.usuario_activo}** ({st.session_state.nivel_acceso})")
-        if st.button("Cerrar sesión", use_container_width=True):
+        st.success(
+            f"Conectado: "
+            f"**{st.session_state.usuario_activo}** "
+            f"({st.session_state.nivel_acceso})"
+        )
+
+        if st.button(
+            "Cerrar sesión",
+            use_container_width=True
+        ):
+            try:
+                supabase.auth.sign_out()
+            except Exception:
+                logging.exception("Error al cerrar sesión")
+
+            st.session_state.access_token = None
+            st.session_state.refresh_token = None
             st.session_state.usuario_activo = None
             st.session_state.nivel_acceso = "Lectura"
             st.rerun()
-
+            
 # --- CABECERA PRINCIPAL ---
 st.title("🌧️ Jóvenes Lluvias")
 if st.session_state.usuario_activo:
@@ -198,9 +282,9 @@ with tabs[0]:
 
                 st.markdown(f"""
                 <div class="song-card">
-                    <strong>{idx_c}. {nombre_c}</strong> <span style="color:#a1a1aa;">— {artista}</span><br>
-                    <span class="badge badge-tone">Tono: {nota}</span>
-                    <span class="badge {badge_class}">{tipo}</span>
+                    <strong>{idx_c}. {html.escape(nombre_c)}</strong> <span style="color:#a1a1aa;">— {html.escape(artista)}</span><br>
+                    <span class="badge badge-tone">Tono: {html.escape(str(nota))}</span>
+                    <span class="badge {badge_class}">{html.escape(str(tipo))}</span>
                     <span style="color:#a1a1aa; font-size:0.85rem;">{bpm}</span>
                 </div>
                 """, unsafe_allow_html=True)
@@ -252,7 +336,7 @@ with tabs[0]:
 with tabs[1]:
     st.subheader("⚡ Programar o Actualizar un Servicio")
     if st.session_state.nivel_acceso not in ["Admin", "Editor"]:
-        st.warning("🔒 Inicia sesión con tu PIN en la barra lateral izquierda para poder editar o crear fechas.")
+        st.warning("🔒 Inicia sesión desde el menú lateral para poder editar o crear fechas.")
     else:
         modo_srv = st.radio("Acción:", ["✏️ Editar servicio existente", "➕ Crear nueva fecha de servicio"], horizontal=True)
 
@@ -425,47 +509,58 @@ with tabs[4]:
     st.subheader("⚙️ Centro de Operaciones — Tabla Maestra Unificada")
     df_srv_full = pd.DataFrame(servicios)
     if not df_srv_full.empty:
-        st.dataframe(
-            df_srv_full[["fecha", "nombre_servicio", "estado", "lugar_servicio", "banda_templo", "info_adicional", "director_alabanza", "stage_manager", "banda_asignada", "setlist_canciones"]],
-            use_container_width=True,
-            hide_index=True
-        )
+        columnas_servicios = [
+            "fecha", "nombre_servicio", "estado", "lugar_servicio",
+            "banda_templo", "info_adicional", "director_alabanza",
+            "stage_manager", "banda_asignada", "setlist_canciones"
+        ]
+        st.dataframe(df_srv_full[[c for c in columnas_servicios if c in df_srv_full.columns]],
+                     use_container_width=True, hide_index=True)
 
     st.divider()
-    st.subheader("👥 Directorio de Servidores Alabanza y Control de Acceso")
+    st.subheader("👥 Directorio de Servidores Alabanza")
     df_dir_full = pd.DataFrame(directorio)
     if not df_dir_full.empty:
-        st.dataframe(
-            df_dir_full[["nombre", "rol_principal", "instrumento_secundario", "banda_templo", "nivel_acceso"]],
-            use_container_width=True,
-            hide_index=True
-        )
+        columnas = ["nombre", "rol_principal", "instrumento_secundario", "banda_templo", "nivel_acceso"]
+        columnas_visibles = [c for c in columnas if c in df_dir_full.columns]
+        st.dataframe(df_dir_full[columnas_visibles], use_container_width=True, hide_index=True)
+    else:
+        st.caption("No hay integrantes disponibles para mostrar.")
 
     if st.session_state.nivel_acceso == "Admin":
-        with st.expander("🔑 Administrar Permisos y PINs"):
+        with st.expander("🔑 Administrar integrantes y permisos"):
             m_sel = st.selectbox("Seleccionar integrante:", ["➕ Nuevo Integrante"] + dir_nombres)
             m_obj = next((d for d in directorio if d["nombre"] == m_sel), {}) if m_sel != "➕ Nuevo Integrante" else {}
 
             with st.form("form_directorio"):
                 c_m1, c_m2, c_m3 = st.columns(3)
                 m_nom = c_m1.text_input("Nombre", value=m_obj.get("nombre") or "")
-                m_rol = c_m2.text_input("Rol Principal", value=m_obj.get("rol_principal") or "Voz")
-                m_sec = c_m3.text_input("Instrumento Secundario", value=m_obj.get("instrumento_secundario") or "")
-
-                c_m4, c_m5, c_m6 = st.columns(3)
-                m_ban = c_m4.text_input("Banda de Templo", value=m_obj.get("banda_templo") or "Banda 2")
+                m_rol = c_m2.text_input("Rol principal", value=m_obj.get("rol_principal") or "Voz")
+                m_sec = c_m3.text_input("Instrumento secundario", value=m_obj.get("instrumento_secundario") or "")
+                c_m4, c_m5 = st.columns(2)
+                m_ban = c_m4.text_input("Banda de templo", value=m_obj.get("banda_templo") or "")
                 niv_opc = ["Lectura", "Editor", "Admin"]
-                m_niv = c_m5.selectbox("Nivel de Permiso", niv_opc, index=niv_opc.index(m_obj["nivel_acceso"]) if m_obj.get("nivel_acceso") in niv_opc else 0)
-                m_pin = c_m6.text_input("PIN de Acceso (4 dígitos)", value=str(m_obj.get("pin_acceso") or ""))
+                m_niv = c_m5.selectbox("Nivel de permiso", niv_opc,
+                                     index=niv_opc.index(m_obj.get("nivel_acceso")) if m_obj.get("nivel_acceso") in niv_opc else 0)
+                st.caption("La cuenta de acceso se crea en Supabase Authentication y se vincula mediante auth_user_id; no se usan PIN.")
+                guardar = st.form_submit_button("💾 Guardar integrante", use_container_width=True)
 
-                if st.form_submit_button("💾 Guardar Integrante", use_container_width=True):
+            if guardar:
+                if not m_nom.strip():
+                    st.error("Debes escribir un nombre.")
+                else:
                     m_pay = {
-                        "nombre": m_nom, "rol_principal": m_rol, "instrumento_secundario": m_sec or None,
-                        "banda_templo": m_ban or None, "nivel_acceso": m_niv, "pin_acceso": m_pin or None
+                        "nombre": m_nom.strip(), "rol_principal": m_rol,
+                        "instrumento_secundario": m_sec or None,
+                        "banda_templo": m_ban or None, "nivel_acceso": m_niv
                     }
-                    if m_sel == "➕ Nuevo Integrante":
-                        supabase.table("directorio_alabanza").insert(m_pay).execute()
-                    else:
-                        supabase.table("directorio_alabanza").update(m_pay).eq("id", m_obj["id"]).execute()
-                    st.success("¡Permisos actualizados!")
-                    st.rerun()
+                    try:
+                        if m_sel == "➕ Nuevo Integrante":
+                            supabase.table("directorio_alabanza").insert(m_pay).execute()
+                        else:
+                            supabase.table("directorio_alabanza").update(m_pay).eq("id", m_obj["id"]).execute()
+                        st.success("Integrante guardado correctamente.")
+                        st.rerun()
+                    except Exception:
+                        logger.exception("Error guardando integrante")
+                        st.error("No se pudo guardar el integrante. Revisa los permisos RLS.")
