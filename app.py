@@ -395,7 +395,7 @@ if autenticado:
                 f_setlist = st.multiselect("🎵 Setlist del Domingo (En orden)", canciones_nombres, default=[c for c in (s_actual.get("setlist_canciones") or []) if c in canciones_nombres])
 
                 fun_opciones = {0: "-- Ninguno --"} | {f["id"]: f"{f['tema']} ({f.get('fecha', '')})" for f in fundamentos}
-                f_fun_id = st.selectbox("📖 Tema de Fundamentos vinculado", list(fun_opciones.keys()), format_func=lambda x: fun_opciones[x], index=list(fun_opciones.keys()).index(s_actual["fundamento_id"]) if s_actual.get("fundamento_id") in fun_opciones else 0)
+                f_fun_id = st.selectbox("📖 Tema del Mensaje", list(fun_opciones.keys()), format_func=lambda x: fun_opciones[x], index=list(fun_opciones.keys()).index(s_actual["fundamento_id"]) if s_actual.get("fundamento_id") in fun_opciones else 0)
 
                 with st.expander("📊 Datos Post-Servicio"):
                     f_hora_real = st.text_input("Hora de inicio real", value=s_actual.get("hora_inicio_real") or "")
