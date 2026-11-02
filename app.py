@@ -105,7 +105,12 @@ def cargar_datos():
             st.error(f"No se pudo consultar {tabla}. Revisa las vistas y políticas RLS en Supabase.")
             return []
 
-    servicios = leer("servicios_maestro" if autenticado else "servicios_publicos", "fecha")
+    servicios = leer(
+    "servicios_maestro" if autenticado else "servicios_publicos",
+    "fecha",
+    descendente=False
+)
+servicios.sort(key=lambda s: (s["fecha"], s["id"]))
     repertorio = leer("repertorio" if autenticado else "repertorio_publico", "titulo")
     fundamentos = leer("fundamentos" if autenticado else "fundamentos_publicos", "id", True)
     if admin:
@@ -247,15 +252,15 @@ with tabs[0]:
     # Selección dinámica. Solo se muestra el próximo DOMINGO con publicación activada.
     # Para visitantes, la vista servicios_publicos también filtra publicar = true.
     hoy = datetime.now(ZoneInfo("America/Guatemala")).date()
-    servicios_publicables = [
-        s for s in servicios
-        if s.get("publicar", False)
-        and s.get("fecha")
-        and date.fromisoformat(s["fecha"]) >= hoy
-        and date.fromisoformat(s["fecha"]).weekday() == 6
-    ]
-    servicios_publicables.sort(key=lambda s: (s["fecha"], s["id"]))
+servicios_publicables = [
+    s for s in servicios
+    if s.get("publicar", False)
+    and s.get("fecha")
+    and date.fromisoformat(s["fecha"]) >= hoy
+    and date.fromisoformat(s["fecha"]).weekday() == 6
+]
 
+servicios_publicables.sort(key=lambda s: (s["fecha"], s["id"]))
     if servicios_publicables:
         srv_actual = servicios_publicables[0]
         st.caption(f"Próximo servicio publicado: {srv_actual['fecha']} · Actualización automática al cambiar la fecha")
