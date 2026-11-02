@@ -270,7 +270,7 @@ with tabs[0]:
         if banda_lista:
             st.info(f"**Banda Asignada:** {', '.join(banda_lista)}")
 
-        st.markdown("### 📖 Fundamentos (Mensaje del Domingo)")
+        st.markdown("### 📖 Mensaje del Domingo")
         fun_id = srv_actual.get("fundamento_id")
         if fun_id and fun_id in fun_dict:
             f_obj = fun_dict[fun_id]
@@ -280,7 +280,7 @@ with tabs[0]:
                 if f_obj.get("recomendacion"):
                     st.warning(f"💡 **Recomendación para equipos:** {f_obj['recomendacion']}")
         else:
-            st.caption("No hay un tema de Fundamentos vinculado a esta fecha todavía.")
+            st.caption("No hay un tema de Mensaje vinculado a esta fecha todavía.")
 
         st.markdown("### 🎶 Lista de la Semana (Setlist & Cifrados)")
         setlist_actual = srv_actual.get("setlist_canciones") or []
